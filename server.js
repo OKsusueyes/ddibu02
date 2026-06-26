@@ -1,59 +1,59 @@
 const express = require('express');
 const path = require('path');
 const multer = require('multer');
-const axios = require('axios');
-const FormData = require('form-data');
-const sharp = require('sharp'); 
+const { OpenAI } = require('openai'); // 🌟 OpenAI 출동!
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// 🚨 주의: 이전 채팅에 올리셨던 키는 노출되었으니, 꼭 '새로 발급받은 API 키'를 넣어주세요!
-const STABILITY_API_KEY = 'sk-DK7E2Dx931AJkpUBFIehIgvep2sofBjukpFyZ2Pam8UizKgc';
+// 🚨 발급받은 OpenAI API 키를 여기에 넣어주세요!
+const OPENAI_API_KEY = 'sk-여기에_오픈AI_키를_넣어주세요';
 
+// OpenAI 연결 설정
+const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 const upload = multer({ storage: multer.memoryStorage() });
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.post('/api/pixelate', upload.single('photo'), async (req, res) => {
     if (!req.file) return res.status(400).json({ error: "사진이 없습니다!" });
 
     try {
-        console.log("📸 원본 사진 업로드 됨! 크기:", req.file.size, "bytes");
+        console.log("📸 사진 업로드 완료! GPT-4o 분석 시작...");
 
-        // 🔥 [수정됨] 최신 SDXL 엔진이 요구하는 1024x1024 크기로 강제 리사이징!
-        const resizedImageBuffer = await sharp(req.file.buffer)
-            .resize(1024, 1024, { fit: 'cover' }) 
-            .png() 
-            .toBuffer();
+        // 1. 이미지를 Base64 문자열로 변환 (GPT에게 보여주기 위함)
+        const base64Image = req.file.buffer.toString('base64');
+        const mimeType = req.file.mimetype;
 
-        console.log("✂️ 리사이징 완료! 1024x1024 변환 성공");
-
-        const formData = new FormData();
-        formData.append('init_image', resizedImageBuffer, {
-            filename: 'upload.png',
-            contentType: 'image/png',
+        // 2. [1단계 콤보] GPT-4o 비전에게 사진 묘사 시키기
+        const visionResponse = await openai.chat.completions.create({
+            model: "gpt-4o",
+            messages: [
+                {
+                    role: "user",
+                    content: [
+                        { type: "text", text: "Describe the core features of the person/object in this image (hair, clothes, expression, colors) in a short English sentence." },
+                        { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64Image}` } }
+                    ]
+                }
+            ],
+            max_tokens: 100
         });
-        
-        formData.append('text_prompts[0][text]', req.body.prompt + ", master-piece pixel art, 8-bit, 128x128");
-        formData.append('text_prompts[0][weight]', 1);
-        formData.append('cfg_scale', 7);
-        formData.append('samples', 1);
 
-        // 🔥 [수정됨] 현재 100% 확실하게 살아있는 최신 SDXL 엔진 주소 적용
-        const response = await axios.post(
-            'https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/image-to-image',
-            formData,
-            {
-                headers: {
-                    ...formData.getHeaders(),
-                    Accept: 'application/json',
-                    Authorization: `Bearer ${STABILITY_API_KEY}`,
-                },
-            }
-        );
+        const imageDescription = visionResponse.choices[0].message.content;
+        console.log("🗣️ GPT의 사진 묘사:", imageDescription);
 
-        const base64Image = response.data.artifacts[0].base64;
-        const finalImageUrl = `data:image/png;base64,${base64Image}`;
+        // 3. [2단계 콤보] 묘사된 글을 바탕으로 DALL-E 3에게 픽셀 아트 지시!
+        console.log("🎨 DALL-E 3로 픽셀 아트 생성 중 (약 10초 소요)...");
+        const dalleResponse = await openai.images.generate({
+            model: "dall-e-3",
+            prompt: `A cute 8-bit pixel art character, retro game style, masterpiece, high quality, solid white background. The character has the following features: ${imageDescription}`,
+            n: 1,
+            size: "1024x1024",
+        });
+
+        const finalImageUrl = dalleResponse.data[0].url;
+        console.log("✨ 픽셀 아트 띠부실 완성!");
 
         res.json({
             success: true,
@@ -61,15 +61,16 @@ app.post('/api/pixelate', upload.single('photo'), async (req, res) => {
         });
 
     } catch (error) {
-        console.error("❌ AI 서버 에러:", error.response ? error.response.data : error.message);
-        res.status(500).json({ error: "변환 중 에러가 발생했습니다!" });
+        console.error("❌ OpenAI 서버 에러:", error.response ? error.response.data : error.message);
+        res.status(500).json({ error: "OpenAI 변환 중 에러가 발생했습니다!" });
     }
 });
 
+// 홈페이지 띄우기
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 app.listen(PORT, () => {
-    console.log(`🚀 최신 SDXL 엔진이 적용된 서버 가동 중! (http://localhost:${PORT})`);
+    console.log(`🚀 OpenAI 연동 서버 가동 중! (http://localhost:${PORT})`);
 });
